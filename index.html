@@ -19,24 +19,25 @@
 <!-- rss-parser (browser build) -->
 <script src="https://cdn.jsdelivr.net/npm/rss-parser@3/dist/rss-parser.browser.min.js"></script>
 <script type="module">
-  // 1 – configure any feeds you want to track
+  /* 1.  Feeds you want to show */
   const feeds = {
     'OpenAI'      : 'https://status.openai.com/feed.rss',
     'AWS'         : 'https://status.aws.amazon.com/rss/health.rss',
-    'Azure'       : 'https://rssfeed.azure.status.microsoft',
+    'Azure'       : 'https://rssfeed.status.azure.com/status/feed',  // fixed URL
     'Google Cloud': 'https://status.cloud.google.com/en/feed.atom',
     'Slack'       : 'https://slack-status.com/feed/rss',
     'GitHub'      : 'https://www.githubstatus.com/history.rss',
     'Cloudflare'  : 'https://www.cloudflarestatus.com/history.rss'
   };
 
-  // 2 – helper to bypass CORS (AllOrigins)
-  const proxify = url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+  /* 2.  CORS proxy (keeps the browser happy) */
+  const proxify = url =>
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
 
-  const parser = new RSSParser();
+  const parser    = new RSSParser();
   const container = document.getElementById('feed-container');
 
-  // 3 – fetch feeds in parallel
+  /* 3.  Load every feed */
   (async () => {
     for (const [name, url] of Object.entries(feeds)) {
       const card = document.createElement('section');
@@ -45,20 +46,33 @@
       container.appendChild(card);
 
       try {
-        const feed = await parser.parseURL(proxify(url));
-        const item  = feed.items?.[0];
-        if (!item) throw new Error('No items found');
+        /* — fetch raw XML then parse it — */
+        const xml  = await (await fetch(proxify(url))).text();
+        const feed = await parser.parseString(xml);
+        const item = feed.items?.[0];
+        if (!item) throw new Error('No items in feed');
+
+        const when = item.isoDate || item.pubDate || '';
         card.innerHTML =
           `<h2>${name}</h2>
            <p><strong>${item.title}</strong></p>
-           <time datetime="${item.isoDate || item.pubDate}">${new Date(item.isoDate || item.pubDate).toLocaleString()}</time><br>
-           <a href="${item.link}" target="_blank" rel="noopener">Full details →</a>`;
+           <time datetime="${when}">
+             ${new Date(when).toLocaleString()}
+           </time><br>
+           <a href="${item.link}" target="_blank" rel="noopener">
+             Full details →
+           </a>`;
       } catch (err) {
-        card.querySelector('p').outerHTML = `<p class="error">Couldn’t load feed<br><code>${err.message}</code></p>`;
-        console.error(`${name} feed error:`, err);
+        card.innerHTML =
+          `<h2>${name}</h2>
+           <p class="error">
+             Couldn’t load feed<br><code>${err.message}</code>
+           </p>`;
+        console.error(`${name}:`, err);
       }
     }
   })();
 </script>
+
 </body>
 </html>
