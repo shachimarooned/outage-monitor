@@ -19,93 +19,97 @@
 <body>
 <h1>Cloud Outage Monitor</h1>
 <div id="feed"></div>
-
 <script type="module">
-/* 1 ─ feeds */
+/* ───────── 1.  feeds ───────── */
 const FEEDS = {
   OpenAI        : 'https://status.openai.com/feed.rss',
   Anthropic     : 'https://status.anthropic.com/history.atom',
-  AWS           : 'https://status.aws.amazon.com/rss/all.rss',
-  Azure         : 'https://status.azure.com/en-us/status/feed/',
+  AWS           : 'https://health.aws.amazon.com/rss/all.rss',
+  Azure         : 'https://status.azure.com/en-us/status/feed',
   'Google Cloud': 'https://status.cloud.google.com/en/feed.atom',
   Slack         : 'https://slack-status.com/feed/rss',
   GitHub        : 'https://www.githubstatus.com/history.rss',
   Cloudflare    : 'https://www.cloudflarestatus.com/history.rss'
 };
 
-/* 2 ─ tiny CORS helper */
+/* ───────── 2.  (optional) your own proxy ─────────
+   1. dash.cloudflare.com → Workers → Create
+   2. Paste:  export default {async fetch(r){const u=new URL(r.url).searchParams.get("u");return fetch(u,{cf:{cacheTtl:60,cacheEverything:true}})}}
+   3. Deploy → copy *.workers.dev URL below.
+*/
+const WORKER_URL = '';          // e.g. 'https://status-proxy.yourname.workers.dev'
+
+/* ───────── 3.  CORS chain ───────── */
 const grab = async url => {
-  for (const wrap of [
-      u=>`https://cors.isomorphic-git.org/${u}`,
-      u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-      u=>u
-  ]) {
+  const chain = [
+    u => WORKER_URL && `${WORKER_URL}?u=${encodeURIComponent(u)}`,
+    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    u => `https://cors.isomorphic-git.org/${u}`,
+    u => u                                   // direct (local testing)
+  ].filter(Boolean);
+
+  for (const wrap of chain) {
     try { return await (await fetch(wrap(url))).text(); } catch {/* next */ }
   }
-  throw new Error('Failed to fetch (blocked)');
+  throw new Error('blocked by origin');
 };
 
-/* 3 ─ namespace-proof first-item parser */
+/* ───────── 4.  namespace-agnostic first item ───────── */
 function firstItem(xml) {
-  const doc  = new DOMParser().parseFromString(xml, 'text/xml');
-  let node   = [...doc.getElementsByTagName('*')]
-                 .find(n => /(?:^|:)item$/.test(n.nodeName))   // RSS 1 & 2
-           ??  [...doc.getElementsByTagName('*')]
-                 .find(n => /(?:^|:)entry$/.test(n.nodeName));  // Atom
-  if (!node) throw new Error('Unknown XML shape');
+  const doc  = new DOMParser().parseFromString(xml,'text/xml');
+  const any  = tag => [...doc.getElementsByTagName('*')]
+                      .find(n => new RegExp(`(?:^|:)${tag}$`).test(n.nodeName));
+  const node = any('item') || any('entry');
 
-  const pick = tag =>
-      [...node.getElementsByTagName('*')]
-        .find(e => new RegExp(`(?:^|:)${tag}$`).test(e.nodeName))
-        ?.textContent.trim() || '';
+  /* no incidents = “operational” */
+  if (!node) return {title: 'All systems operational', link: '#', date: ''};
 
+  const pick = tag => [...node.getElementsByTagName('*')]
+                       .find(n => new RegExp(`(?:^|:)${tag}$`).test(n.nodeName))
+                      ?.textContent.trim() || '';
   const linkEl = [...node.getElementsByTagName('*')]
-                   .find(e => /(?:^|:)link$/.test(e.nodeName));
-  const link   = linkEl?.getAttribute('href') || linkEl?.textContent.trim() || '#';
-
-  return {
-    title: pick('title') || '(no title)',
-    link,
-    date : pick('updated') || pick('published') || pick('pubDate')
-  };
+                  .find(n => /(?:^|:)link$/.test(n.nodeName));
+  const link = linkEl?.getAttribute('href') || linkEl?.textContent.trim() || '#';
+  return {title: pick('title')||'(no title)', link,
+          date : pick('updated')||pick('published')||pick('pubDate')};
 }
 
-/* 4 ─ title → colour */
-const colour = t => {
-  t = t.toLowerCase();
-  if (/(major|outage|incident|service issue)/.test(t)) return 'var(--red)';
-  if (/(partial|degraded|disruption|advisory)/.test(t)) return 'var(--orange)';
-  if (/maintenance/.test(t))                           return 'var(--blue)';
-  if (/(resolved|operational|closed)/.test(t))         return 'var(--green)';
+/* ───────── 5.  title → colour ───────── */
+const colour = t=>{
+  t=t.toLowerCase();
+  if(/(major|outage|incident|service issue)/.test(t))  return 'var(--red)';
+  if(/partial|degraded|disruption|advisory/.test(t))    return 'var(--orange)';
+  if(/maintenance/.test(t))                             return 'var(--blue)';
+  if(/operational|resolved|closed/.test(t))             return 'var(--green)';
   return 'var(--grey)';
 };
 
-/* 5 ─ render */
-const wrap = document.getElementById('feed');
-for (const [name, url] of Object.entries(FEEDS)) {
-  const card = document.createElement('section');
-  card.className = 'card';
-  card.innerHTML = `<h2>${name}</h2><p>Loading…</p>`;
+/* ───────── 6.  render grid ───────── */
+const wrap=document.getElementById('feed');
+for(const [name,url] of Object.entries(FEEDS)){
+  const card=document.createElement('section');
+  card.className='card';
+  card.innerHTML=`<h2>${name}</h2><p>Loading…</p>`;
   wrap.appendChild(card);
 
   grab(url)
-    .then(xml => {
-      const { title, link, date } = firstItem(xml);
-      card.style.borderLeftColor = colour(title);
-      card.innerHTML =
+    .then(xml=>{
+      const {title,link,date}=firstItem(xml);
+      card.style.borderLeftColor=colour(title);
+      card.innerHTML=
         `<h2>${name}</h2>
          <p><strong>${title}</strong></p>
-         <time>${date ? new Date(date).toLocaleString() : ''}</time><br>
-         <a href="${link}" target="_blank" rel="noopener">details →</a>`;
+         <time>${date?new Date(date).toLocaleString():''}</time><br>
+         ${link!=='#'?`<a href="${link}" target="_blank" rel="noopener">details →</a>`:''}`;
     })
-    .catch(err => {
-      card.style.borderLeftColor = 'var(--red)';
-      card.innerHTML =
-        `<h2>${name}</h2><p class="err">Couldn’t load feed\n${err.message}</p>`;
-      console.error(name, err);
+    .catch(e=>{
+      card.style.borderLeftColor='var(--red)';
+      card.innerHTML=`<h2>${name}</h2><p class="err">Couldn’t load feed<br>${e.message}</p>`;
+      console.error(name,e);
     });
 }
 </script>
+
 
 </body>
 </html>
