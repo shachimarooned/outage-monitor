@@ -1,15 +1,36 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
+<meta charset="utf-8">
 <title>Cloud-Service Outage Monitor</title>
 <style>
-  body{font-family:system-ui,Arial,sans-serif;background:#f6f8fa;margin:0;padding:2rem;line-height:1.4}
-  h1{margin-top:0}
-  .card{background:#fff;border:1px solid #d0d7de;border-radius:8px;padding:1rem;margin-bottom:1rem;box-shadow:0 1px 3px rgba(0,0,0,.05)}
-  .card h2{margin:0 0 .25rem;font-size:1.1rem}
-  .card time{color:#61676d;font-size:.85rem}
-  .error{color:#d73a49;font-size:.9rem}
+  :root{
+    --red:     #d83a3a;
+    --orange:  #d97706;
+    --blue:    #2563eb;
+    --green:   #15803d;
+    --grey:    #d0d7de;
+  }
+  body{font-family:system-ui,Arial,sans-serif;background:#f6f8fa;margin:0;padding:1.5rem}
+  h1{margin:0 0 1rem;font-size:1.5rem}
+  #feed-container{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+    gap:1rem;
+  }
+  .card{
+    background:#fff;
+    border:1px solid var(--grey);
+    border-left:8px solid var(--grey);
+    border-radius:6px;
+    padding:.75rem .9rem;
+    box-shadow:0 1px 2px rgba(0,0,0,.04);
+    min-height:120px;
+  }
+  .card h2{margin:.1rem 0 .35rem;font-size:1rem}
+  .card p{margin:.25rem 0}
+  time{color:#61676d;font-size:.8rem}
+  .error{color:var(--red);white-space:pre-line;font-size:.85rem}
 </style>
 </head>
 <body>
@@ -17,77 +38,87 @@
 <div id="feed-container"></div>
 
 <script type="module">
-  /* 1 ─ feeds to display ──────────────────────────────────────────────── */
-  const feeds = {
-    'OpenAI'       : 'https://status.openai.com/feed.rss',
-    'AWS'          : 'https://status.aws.amazon.com/rss/health.rss',
-    'Azure'        : 'https://rssfeed.status.azure.com/status/feed',
-    'Google Cloud' : 'https://status.cloud.google.com/en/feed.atom',
-    'Slack'        : 'https://slack-status.com/feed/rss',
-    'GitHub'       : 'https://www.githubstatus.com/history.rss',
-    'Cloudflare'   : 'https://www.cloudflarestatus.com/history.rss'
+  /* 1  Feeds */
+  const FEEDS = {
+    'OpenAI'      : 'https://status.openai.com/feed.rss',
+    'Anthropic'   : 'https://status.anthropic.com/history.rss',
+    'AWS'         : 'https://status.aws.amazon.com/rss/health.rss',
+    'Azure'       : 'https://azurestatuscdn.azureedge.net/en-us/status/feed/',
+    'Google Cloud': 'https://status.cloud.google.com/en/feed.atom',
+    'Slack'       : 'https://slack-status.com/feed/rss',
+    'GitHub'      : 'https://www.githubstatus.com/history.rss',
+    'Cloudflare'  : 'https://www.cloudflarestatus.com/history.rss'
   };
 
-  /* 2 ─ simple CORS proxy ─────────────────────────────────────────────── */
-  const proxify = url =>
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-
-  /* 3 ─ helper: extract first item/entry from an RSS or Atom feed ─────── */
-  function parseFirstItem(xml) {
-    const doc = new DOMParser().parseFromString(xml, 'application/xml');
-
-    /* RSS 2.0 */
-    let item = doc.querySelector('channel > item');
-    if (item) {
-      return {
-        title : item.querySelector('title')?.textContent?.trim() ?? '(no title)',
-        link  : item.querySelector('link')?.textContent?.trim()  ?? '#',
-        date  : item.querySelector('pubDate')?.textContent       ??
-                item.querySelector('dc\\:date')?.textContent     ?? ''
-      };
+  /* 2  CORS helper with two fall-backs */
+  const fetchFeed = async url => {
+    const layers = [
+      `https://cors.isomorphic-git.org/${url}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      url
+    ];
+    for (const u of layers){
+      try{ return await (await fetch(u)).text(); }catch{}
     }
+    throw new Error('Failed to fetch');
+  };
 
-    /* Atom 1.0 */
-    item = doc.querySelector('feed > entry');
-    if (item) {
-      const linkElem = item.querySelector('link[rel="alternate"]') ||
-                       item.querySelector('link:not([rel])')        ||
-                       item.querySelector('link');
-      return {
-        title : item.querySelector('title')?.textContent?.trim() ?? '(no title)',
-        link  : linkElem?.getAttribute('href') ?? '#',
-        date  : item.querySelector('updated')?.textContent ??
-                item.querySelector('published')?.textContent ?? ''
-      };
-    }
+  /* 3  Very small RSS/Atom parser (first item only) */
+  const firstItem = xml => {
+    const doc = new DOMParser().parseFromString(xml,'application/xml');
+    let node =
+      doc.querySelector('channel>item')             || // RSS 2
+      doc.querySelector('rss>item, rdf\\:RDF>item') || // RSS 1
+      doc.querySelector('feed>entry, entry');          // Atom
+    if(!node) throw new Error('Unknown feed format');
 
-    throw new Error('Unrecognised feed format');
-  }
+    const pick = sel=>node.querySelector(sel)?.textContent?.trim()||'';
+    const linkEl =
+      node.querySelector('link[rel="alternate"]') ||
+      node.querySelector('link:not([rel])')       ||
+      node.querySelector('link');
+    return {
+      title: pick('title'),
+      link : linkEl?.getAttribute?.('href') || linkEl?.textContent || '#',
+      date : pick('updated')||pick('published')||pick('pubDate')
+    };
+  };
 
-  /* 4 ─ render cards ──────────────────────────────────────────────────── */
+  /* 4  Map title → colour */
+  const statusColor = title => {
+    const t = title.toLowerCase();
+    if(/[^\w](major|outage|incident)[^\w]/.test(t))   return 'var(--red)';
+    if(/partial|degraded|disruption/.test(t))         return 'var(--orange)';
+    if(/maintenance/.test(t))                         return 'var(--blue)';
+    if(/resolved|operational|closed/.test(t))         return 'var(--green)';
+    return 'var(--grey)';
+  };
+
+  /* 5  Render */
   const container = document.getElementById('feed-container');
 
-  for (const [name, url] of Object.entries(feeds)) {
+  for(const [name,url] of Object.entries(FEEDS)){
     const card = document.createElement('section');
-    card.className = 'card';
-    card.innerHTML = `<h2>${name}</h2><p>Loading…</p>`;
+    card.className='card';
+    card.innerHTML=`<h2>${name}</h2><p>Loading…</p>`;
     container.appendChild(card);
 
-    fetch(proxify(url))
-      .then(r => r.text())
-      .then(xml => {
-        const {title, link, date} = parseFirstItem(xml);
-        card.innerHTML =
+    fetchFeed(url)
+      .then(xml=>{
+        const {title,link,date}=firstItem(xml);
+        card.style.borderLeftColor=statusColor(title);
+        card.innerHTML=
           `<h2>${name}</h2>
            <p><strong>${title}</strong></p>
-           <time datetime="${date}">${new Date(date).toLocaleString()}</time><br>
+           <time datetime="${date}">${date?new Date(date).toLocaleString():''}</time><br>
            <a href="${link}" target="_blank" rel="noopener">Full details →</a>`;
       })
-      .catch(err => {
-        card.innerHTML =
+      .catch(err=>{
+        card.style.borderLeftColor='var(--red)';
+        card.innerHTML=
           `<h2>${name}</h2>
-           <p class="error">Couldn’t load feed<br><code>${err.message}</code></p>`;
-        console.error(`${name}:`, err);
+           <p class="error">Couldn’t load feed\n${err.message}</p>`;
+        console.error(`${name}:`,err);
       });
   }
 </script>
