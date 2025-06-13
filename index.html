@@ -5,7 +5,7 @@
 <title>Cloud Outage Monitor</title>
 <style>
   :root{--red:#d83a3a;--orange:#d97706;--blue:#2563eb;--green:#15803d;--grey:#d0d7de}
-  body{font:15px/1.4 system-ui,Arial,sans-serif;background:#f6f8fa;margin:0;padding:1.2rem}
+  body{font:15px/1.4 system-ui,Segoe UI,Arial,sans-serif;background:#f6f8fa;margin:0;padding:1.2rem}
   h1{margin:0 0 1rem;font-size:1.4rem}
   #feed{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:.8rem}
   .card{background:#fff;border:1px solid var(--grey);border-left:6px solid var(--grey);
@@ -21,19 +21,19 @@
 <div id="feed"></div>
 
 <script type="module">
-/* 1 ───────────── feeds you care about */
+/* 1 ─ feeds */
 const FEEDS = {
-  OpenAI      : 'https://status.openai.com/feed.rss',
-  Anthropic   : 'https://status.anthropic.com/history.rss',
-  AWS         : 'https://status.aws.amazon.com/rss/health.rss',
-  Azure       : 'https://azurestatuscdn.azureedge.net/en-us/status/feed/',
+  OpenAI        : 'https://status.openai.com/feed.rss',
+  Anthropic     : 'https://status.anthropic.com/history.atom',
+  AWS           : 'https://status.aws.amazon.com/rss/health.rss',
+  Azure         : 'https://azurestatuscdn.azureedge.net/en-us/status/feed/',
   'Google Cloud': 'https://status.cloud.google.com/en/feed.atom',
-  Slack       : 'https://slack-status.com/feed/rss',
-  GitHub      : 'https://www.githubstatus.com/history.rss',
-  Cloudflare  : 'https://www.cloudflarestatus.com/history.rss'
+  Slack         : 'https://slack-status.com/feed/rss',
+  GitHub        : 'https://www.githubstatus.com/history.rss',
+  Cloudflare    : 'https://www.cloudflarestatus.com/history.rss'
 };
 
-/* 2 ───────────── small CORS helper (two fall-backs) */
+/* 2 ─ CORS helper */
 const grab = async url => {
   for (const wrap of [
       u=>`https://cors.isomorphic-git.org/${u}`,
@@ -42,38 +42,37 @@ const grab = async url => {
   ]){
     try{ return await (await fetch(wrap(url))).text(); }catch{}
   }
-  throw new Error('Failed to fetch (blocked by origin)');
+  throw new Error('Failed to fetch (blocked)');
 };
 
-/* 3 ───────────── very tolerant “first incident” extractor */
+/* 3 ─ tolerant first-item parser */
 function firstItem(xml){
   const doc = new DOMParser().parseFromString(xml,'text/xml');
-  let node =
-      doc.querySelector('channel>item')     || // RSS 2
-      doc.querySelector('item')             || // RSS 1
-      doc.querySelector('entry');              // Atom
-  if(!node) throw new Error('Unknown XML shape');
+  const rss = doc.getElementsByTagName('item')[0];
+  const atom= doc.getElementsByTagName('entry')[0];
+  const node = rss || atom;
+  if(!node) throw new Error('Unknown XML');
 
-  const txt = sel=>node.querySelector(sel)?.textContent?.trim()||'';
+  const text = sel=>node.getElementsByTagName(sel)[0]?.textContent.trim()||'';
   const link =
-      node.querySelector('link[rel="alternate"]')?.getAttribute('href') ||
-      node.querySelector('link')?.getAttribute?.('href')                 ||
-      node.querySelector('link')?.textContent?.trim()                    || '#';
-  return {title:txt('title')||'(no title)', link, date:txt('updated')||txt('published')||txt('pubDate')};
+     node.getElementsByTagName('link')[0]?.getAttribute('href') ||
+     node.getElementsByTagName('link')[0]?.textContent.trim()    || '#';
+
+  return {title:text('title')||'(no title)', link, date:text('updated')||text('published')||text('pubDate')};
 }
 
-/* 4 ───────────── severity → colour */
-const colour = title=>{
-  const t=title.toLowerCase();
-  if(/(major|outage|incident)/.test(t))         return 'var(--red)';
-  if(/partial|degraded|disruption/.test(t))     return 'var(--orange)';
-  if(/maintenance/.test(t))                     return 'var(--blue)';
-  if(/resolved|operational|closed/.test(t))     return 'var(--green)';
+/* 4 ─ severity → colour */
+const colour = t=>{
+  t=t.toLowerCase();
+  if(/(major|outage|incident)/.test(t)) return 'var(--red)';
+  if(/partial|degraded|disruption/.test(t)) return 'var(--orange)';
+  if(/maintenance/.test(t)) return 'var(--blue)';
+  if(/resolved|operational|closed/.test(t)) return 'var(--green)';
   return 'var(--grey)';
 };
 
-/* 5 ───────────── render everything */
-const wrap = document.getElementById('feed');
+/* 5 ─ render */
+const wrap=document.getElementById('feed');
 
 for(const [name,url] of Object.entries(FEEDS)){
   const card=document.createElement('section');
