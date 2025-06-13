@@ -37,7 +37,8 @@ const FEEDS = {
    2. Paste:  export default {async fetch(r){const u=new URL(r.url).searchParams.get("u");return fetch(u,{cf:{cacheTtl:60,cacheEverything:true}})}}
    3. Deploy → copy *.workers.dev URL below.
 */
-const WORKER_URL = '';          // e.g. 'https://status-proxy.yourname.workers.dev'
+const WORKER_URL = 'https://status-proxy.YOUR_WORKER_SUBDOMAIN.workers.dev';
+
 
 /* ───────── 3.  CORS chain ───────── */
 const grab = async url => {
