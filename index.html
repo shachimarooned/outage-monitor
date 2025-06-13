@@ -9,9 +9,10 @@
   h1{margin:0 0 1rem;font-size:1.4rem}
   #feed{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:.8rem}
   .card{background:#fff;border:1px solid var(--grey);border-left:6px solid var(--grey);
-        border-radius:6px;padding:.7rem .9rem;box-shadow:0 1px 2px rgba(0,0,0,.04);min-height:110px}
-  .card h2{margin:.1rem 0 .3rem;font-size:1rem}
+        border-radius:6px;padding:.7rem .9rem;box-shadow:0 1px 2px rgba(0,0,0,.04);min-height:120px}
+  .card h2{margin:.1rem 0 .25rem;font-size:1rem}
   .card p{margin:.25rem 0}
+  .components{color:#444;font-size:.85rem;margin:.15rem 0}
   .err{color:var(--red);white-space:pre-line;font-size:.85rem}
   time{color:#61676d;font-size:.78rem}
 </style>
@@ -19,8 +20,9 @@
 <body>
 <h1>Cloud Outage Monitor</h1>
 <div id="feed"></div>
+
 <script type="module">
-/* ───────── 1.  feeds ───────── */
+/* 1 ─ feeds */
 const FEEDS = {
   OpenAI        : 'https://status.openai.com/feed.rss',
   Anthropic     : 'https://status.anthropic.com/history.atom',
@@ -32,62 +34,54 @@ const FEEDS = {
   Cloudflare    : 'https://www.cloudflarestatus.com/history.rss'
 };
 
-/* ───────── 2.  (optional) your own proxy ─────────
-   1. dash.cloudflare.com → Workers → Create
-   2. Paste:  export default {async fetch(r){const u=new URL(r.url).searchParams.get("u");return fetch(u,{cf:{cacheTtl:60,cacheEverything:true}})}}
-   3. Deploy → copy *.workers.dev URL below.
-*/
-const WORKER_URL = 'https://status-proxy.YOUR_WORKER_SUBDOMAIN.workers.dev';
+/* 2 ─ your Cloudflare Worker URL */
+const WORKER_URL = 'https://morning-mud-db98.shachimarooned.workers.dev/?u=<feed-url>';   // ← replace this
 
-
-/* ───────── 3.  CORS chain ───────── */
+/* 3 ─ proxy chain */
 const grab = async url => {
-  const chain = [
-    u => WORKER_URL && `${WORKER_URL}?u=${encodeURIComponent(u)}`,
-    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-    u => `https://cors.isomorphic-git.org/${u}`,
-    u => u                                   // direct (local testing)
-  ].filter(Boolean);
-
-  for (const wrap of chain) {
-    try { return await (await fetch(wrap(url))).text(); } catch {/* next */ }
+  const chain=[
+    u=>`${WORKER_URL}?u=${encodeURIComponent(u)}`,
+    u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    u=>`https://cors.isomorphic-git.org/${u}`,
+    u=>u];
+  for(const wrap of chain){
+    try{return await(await fetch(wrap(url))).text();}catch{}
   }
   throw new Error('blocked by origin');
 };
 
-/* ───────── 4.  namespace-agnostic first item ───────── */
-function firstItem(xml) {
-  const doc  = new DOMParser().parseFromString(xml,'text/xml');
-  const any  = tag => [...doc.getElementsByTagName('*')]
-                      .find(n => new RegExp(`(?:^|:)${tag}$`).test(n.nodeName));
-  const node = any('item') || any('entry');
+/* 4 ─ parse first item/entry inc. categories */
+function firstItem(xml){
+  const doc=new DOMParser().parseFromString(xml,'text/xml');
+  const any=tag=>[...doc.getElementsByTagName('*')]
+                  .find(n=>new RegExp(`(?:^|:)${tag}$`).test(n.nodeName));
+  const node=any('item')||any('entry');
+  if(!node) return {title:'All systems operational',cat:[],link:'#',date:''};
 
-  /* no incidents = “operational” */
-  if (!node) return {title: 'All systems operational', link: '#', date: ''};
-
-  const pick = tag => [...node.getElementsByTagName('*')]
-                       .find(n => new RegExp(`(?:^|:)${tag}$`).test(n.nodeName))
-                      ?.textContent.trim() || '';
-  const linkEl = [...node.getElementsByTagName('*')]
-                  .find(n => /(?:^|:)link$/.test(n.nodeName));
-  const link = linkEl?.getAttribute('href') || linkEl?.textContent.trim() || '#';
-  return {title: pick('title')||'(no title)', link,
-          date : pick('updated')||pick('published')||pick('pubDate')};
+  const pick=tag=>[...node.getElementsByTagName('*')]
+                   .find(n=>new RegExp(`(?:^|:)${tag}$`).test(n.nodeName))
+                  ?.textContent.trim()||'';
+  const linkEl=[...node.getElementsByTagName('*')]
+                 .find(n=>/(?:^|:)link$/.test(n.nodeName));
+  const link=linkEl?.getAttribute('href')||linkEl?.textContent.trim()||'#';
+  const cats=[...node.getElementsByTagName('category')].map(c=>c.textContent.trim());
+  return{title:pick('title')||'(no title)',cat:cats,link,
+         date:pick('updated')||pick('published')||pick('pubDate')};
 }
 
-/* ───────── 5.  title → colour ───────── */
-const colour = t=>{
+/* 5 ─ title → colour */
+const colour=t=>{
   t=t.toLowerCase();
-  if(/(major|outage|incident|service issue)/.test(t))  return 'var(--red)';
-  if(/partial|degraded|disruption|advisory/.test(t))    return 'var(--orange)';
-  if(/maintenance/.test(t))                             return 'var(--blue)';
-  if(/operational|resolved|closed/.test(t))             return 'var(--green)';
-  return 'var(--grey)';
+  if(/(major|outage|incident|service issue)/.test(t)) return'var(--red)';
+  if(/partial|degraded|disruption|advisory/.test(t))  return'var(--orange)';
+  if(/maintenance/.test(t))                           return'var(--blue)';
+  if(/operational|resolved|closed/.test(t))           return'var(--green)';
+  return'var(--grey)';
 };
 
-/* ───────── 6.  render grid ───────── */
+/* 6 ─ render cards */
 const wrap=document.getElementById('feed');
-for(const [name,url] of Object.entries(FEEDS)){
+for(const [name,url]of Object.entries(FEEDS)){
   const card=document.createElement('section');
   card.className='card';
   card.innerHTML=`<h2>${name}</h2><p>Loading…</p>`;
@@ -95,22 +89,21 @@ for(const [name,url] of Object.entries(FEEDS)){
 
   grab(url)
     .then(xml=>{
-      const {title,link,date}=firstItem(xml);
+      const{title,cat,link,date}=firstItem(xml);
       card.style.borderLeftColor=colour(title);
       card.innerHTML=
         `<h2>${name}</h2>
          <p><strong>${title}</strong></p>
+         ${cat.length?`<div class="components">${cat.join(', ')}</div>`:''}
          <time>${date?new Date(date).toLocaleString():''}</time><br>
          ${link!=='#'?`<a href="${link}" target="_blank" rel="noopener">details →</a>`:''}`;
     })
-    .catch(e=>{
+    .catch(err=>{
       card.style.borderLeftColor='var(--red)';
-      card.innerHTML=`<h2>${name}</h2><p class="err">Couldn’t load feed<br>${e.message}</p>`;
-      console.error(name,e);
+      card.innerHTML=`<h2>${name}</h2><p class="err">Couldn’t load feed\n${err.message}</p>`;
+      console.error(name,err);
     });
 }
 </script>
-
-
 </body>
 </html>
