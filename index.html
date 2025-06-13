@@ -2,125 +2,101 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Cloud-Service Outage Monitor</title>
+<title>Cloud Outage Monitor</title>
 <style>
-  :root{
-    --red:     #d83a3a;
-    --orange:  #d97706;
-    --blue:    #2563eb;
-    --green:   #15803d;
-    --grey:    #d0d7de;
-  }
-  body{font-family:system-ui,Arial,sans-serif;background:#f6f8fa;margin:0;padding:1.5rem}
-  h1{margin:0 0 1rem;font-size:1.5rem}
-  #feed-container{
-    display:grid;
-    grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
-    gap:1rem;
-  }
-  .card{
-    background:#fff;
-    border:1px solid var(--grey);
-    border-left:8px solid var(--grey);
-    border-radius:6px;
-    padding:.75rem .9rem;
-    box-shadow:0 1px 2px rgba(0,0,0,.04);
-    min-height:120px;
-  }
-  .card h2{margin:.1rem 0 .35rem;font-size:1rem}
+  :root{--red:#d83a3a;--orange:#d97706;--blue:#2563eb;--green:#15803d;--grey:#d0d7de}
+  body{font:15px/1.4 system-ui,Arial,sans-serif;background:#f6f8fa;margin:0;padding:1.2rem}
+  h1{margin:0 0 1rem;font-size:1.4rem}
+  #feed{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:.8rem}
+  .card{background:#fff;border:1px solid var(--grey);border-left:6px solid var(--grey);
+        border-radius:6px;padding:.7rem .9rem;box-shadow:0 1px 2px rgba(0,0,0,.04);min-height:110px}
+  .card h2{margin:.1rem 0 .3rem;font-size:1rem}
   .card p{margin:.25rem 0}
-  time{color:#61676d;font-size:.8rem}
-  .error{color:var(--red);white-space:pre-line;font-size:.85rem}
+  .err{color:var(--red);white-space:pre-line;font-size:.85rem}
+  time{color:#61676d;font-size:.78rem}
 </style>
 </head>
 <body>
-<h1>Cloud&nbsp;Outage&nbsp;Monitor</h1>
-<div id="feed-container"></div>
+<h1>Cloud Outage Monitor</h1>
+<div id="feed"></div>
 
 <script type="module">
-  /* 1  Feeds */
-  const FEEDS = {
-    'OpenAI'      : 'https://status.openai.com/feed.rss',
-    'Anthropic'   : 'https://status.anthropic.com/history.rss',
-    'AWS'         : 'https://status.aws.amazon.com/rss/health.rss',
-    'Azure'       : 'https://azurestatuscdn.azureedge.net/en-us/status/feed/',
-    'Google Cloud': 'https://status.cloud.google.com/en/feed.atom',
-    'Slack'       : 'https://slack-status.com/feed/rss',
-    'GitHub'      : 'https://www.githubstatus.com/history.rss',
-    'Cloudflare'  : 'https://www.cloudflarestatus.com/history.rss'
-  };
+/* 1 ───────────── feeds you care about */
+const FEEDS = {
+  OpenAI      : 'https://status.openai.com/feed.rss',
+  Anthropic   : 'https://status.anthropic.com/history.rss',
+  AWS         : 'https://status.aws.amazon.com/rss/health.rss',
+  Azure       : 'https://azurestatuscdn.azureedge.net/en-us/status/feed/',
+  'Google Cloud': 'https://status.cloud.google.com/en/feed.atom',
+  Slack       : 'https://slack-status.com/feed/rss',
+  GitHub      : 'https://www.githubstatus.com/history.rss',
+  Cloudflare  : 'https://www.cloudflarestatus.com/history.rss'
+};
 
-  /* 2  CORS helper with two fall-backs */
-  const fetchFeed = async url => {
-    const layers = [
-      `https://cors.isomorphic-git.org/${url}`,
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-      url
-    ];
-    for (const u of layers){
-      try{ return await (await fetch(u)).text(); }catch{}
-    }
-    throw new Error('Failed to fetch');
-  };
-
-  /* 3  Very small RSS/Atom parser (first item only) */
-  const firstItem = xml => {
-    const doc = new DOMParser().parseFromString(xml,'application/xml');
-    let node =
-      doc.querySelector('channel>item')             || // RSS 2
-      doc.querySelector('rss>item, rdf\\:RDF>item') || // RSS 1
-      doc.querySelector('feed>entry, entry');          // Atom
-    if(!node) throw new Error('Unknown feed format');
-
-    const pick = sel=>node.querySelector(sel)?.textContent?.trim()||'';
-    const linkEl =
-      node.querySelector('link[rel="alternate"]') ||
-      node.querySelector('link:not([rel])')       ||
-      node.querySelector('link');
-    return {
-      title: pick('title'),
-      link : linkEl?.getAttribute?.('href') || linkEl?.textContent || '#',
-      date : pick('updated')||pick('published')||pick('pubDate')
-    };
-  };
-
-  /* 4  Map title → colour */
-  const statusColor = title => {
-    const t = title.toLowerCase();
-    if(/[^\w](major|outage|incident)[^\w]/.test(t))   return 'var(--red)';
-    if(/partial|degraded|disruption/.test(t))         return 'var(--orange)';
-    if(/maintenance/.test(t))                         return 'var(--blue)';
-    if(/resolved|operational|closed/.test(t))         return 'var(--green)';
-    return 'var(--grey)';
-  };
-
-  /* 5  Render */
-  const container = document.getElementById('feed-container');
-
-  for(const [name,url] of Object.entries(FEEDS)){
-    const card = document.createElement('section');
-    card.className='card';
-    card.innerHTML=`<h2>${name}</h2><p>Loading…</p>`;
-    container.appendChild(card);
-
-    fetchFeed(url)
-      .then(xml=>{
-        const {title,link,date}=firstItem(xml);
-        card.style.borderLeftColor=statusColor(title);
-        card.innerHTML=
-          `<h2>${name}</h2>
-           <p><strong>${title}</strong></p>
-           <time datetime="${date}">${date?new Date(date).toLocaleString():''}</time><br>
-           <a href="${link}" target="_blank" rel="noopener">Full details →</a>`;
-      })
-      .catch(err=>{
-        card.style.borderLeftColor='var(--red)';
-        card.innerHTML=
-          `<h2>${name}</h2>
-           <p class="error">Couldn’t load feed\n${err.message}</p>`;
-        console.error(`${name}:`,err);
-      });
+/* 2 ───────────── small CORS helper (two fall-backs) */
+const grab = async url => {
+  for (const wrap of [
+      u=>`https://cors.isomorphic-git.org/${u}`,
+      u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+      u=>u
+  ]){
+    try{ return await (await fetch(wrap(url))).text(); }catch{}
   }
+  throw new Error('Failed to fetch (blocked by origin)');
+};
+
+/* 3 ───────────── very tolerant “first incident” extractor */
+function firstItem(xml){
+  const doc = new DOMParser().parseFromString(xml,'text/xml');
+  let node =
+      doc.querySelector('channel>item')     || // RSS 2
+      doc.querySelector('item')             || // RSS 1
+      doc.querySelector('entry');              // Atom
+  if(!node) throw new Error('Unknown XML shape');
+
+  const txt = sel=>node.querySelector(sel)?.textContent?.trim()||'';
+  const link =
+      node.querySelector('link[rel="alternate"]')?.getAttribute('href') ||
+      node.querySelector('link')?.getAttribute?.('href')                 ||
+      node.querySelector('link')?.textContent?.trim()                    || '#';
+  return {title:txt('title')||'(no title)', link, date:txt('updated')||txt('published')||txt('pubDate')};
+}
+
+/* 4 ───────────── severity → colour */
+const colour = title=>{
+  const t=title.toLowerCase();
+  if(/(major|outage|incident)/.test(t))         return 'var(--red)';
+  if(/partial|degraded|disruption/.test(t))     return 'var(--orange)';
+  if(/maintenance/.test(t))                     return 'var(--blue)';
+  if(/resolved|operational|closed/.test(t))     return 'var(--green)';
+  return 'var(--grey)';
+};
+
+/* 5 ───────────── render everything */
+const wrap = document.getElementById('feed');
+
+for(const [name,url] of Object.entries(FEEDS)){
+  const card=document.createElement('section');
+  card.className='card';
+  card.innerHTML=`<h2>${name}</h2><p>Loading…</p>`;
+  wrap.appendChild(card);
+
+  grab(url)
+    .then(xml=>{
+      const {title,link,date}=firstItem(xml);
+      card.style.borderLeftColor = colour(title);
+      card.innerHTML =
+        `<h2>${name}</h2>
+         <p><strong>${title}</strong></p>
+         <time>${date?new Date(date).toLocaleString():''}</time><br>
+         <a href="${link}" target="_blank" rel="noopener">details →</a>`;
+    })
+    .catch(e=>{
+      card.style.borderLeftColor='var(--red)';
+      card.innerHTML=`<h2>${name}</h2><p class="err">Couldn’t load feed\n${e.message}</p>`;
+      console.error(name,e);
+    });
+}
 </script>
 </body>
 </html>
